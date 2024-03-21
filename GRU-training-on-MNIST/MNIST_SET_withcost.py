@@ -1,4 +1,5 @@
 # coding utf-8
+# rewiring with circle layout
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -11,24 +12,28 @@ import numpy as np
 # import tensorflow as tf
 import matplotlib.pyplot as plt
 import tensorflow.compat.v1 as tf
+
 tf.disable_v2_behavior()
 
 import sys
 sys.path.append('../')
-from model.network import Model
-from datasets.Gesture_preprocess import GestureData
-from utils.tools import mkdir_p, save_hp
 
+from model.smnistnet import Model
+from datasets.MNIST_preprocess import MnistData
+from utils.tools import mkdir_p, save_hp
+    
 
 def get_default_hp():
     hp = {
-        'n_input': 32,
+        'n_input': 28,
+        'n_steps': 28,
         'n_hidden': 131,
-        'n_classes': 5,
+        'n_classes': 10,
         'learning_rate': 0.005,
-        'batch_size': 32,
-        'training_iters': 301,
+        'batch_size': 128,
+        'training_iters': 101,
         'log_period': 1,
+        'l1': 0,  # penalty of wiring cost
         'sparsity': None,
     }
     return hp
@@ -58,34 +63,89 @@ def weight_sampler_strict_number(w_0, n_in, n_out, nb_non_zero):
     return w, is_connected
 
 
-def prune_threshold(weights, thresholds):
-    is_con = np.greater(abs(weights), 0).astype(int)
-    noWeights = np.sum(is_con)
+def find_first_pos(array, value):
+    idx = (np.abs(array - value)).argmin()
+    return idx
 
-    rewiredWeights = abs(weights.copy())
-    rewiredWeights[rewiredWeights > thresholds] = 1
+
+def find_last_pos(array, value):
+    idx = (np.abs(array - value))[::-1].argmin()
+    return array.shape[0] - idx
+
+
+# https://github.com/dcmocanu/sparse-evolutionary-artificial-neural-networks
+def rewireMask(weights, noWeights, zeta):
+    # rewire weight matrix
+
+    # remove zeta largest negative and smallest positive weights
+    values = np.sort(weights.ravel())
+    firstZeroPos = find_first_pos(values, 0)
+    lastZeroPos = find_last_pos(values, 0)
+
+    largestNegative = values[int((1-zeta) * firstZeroPos)]
+    smallestPositive = values[int(min(values.shape[0] - 1, lastZeroPos +
+                                      zeta * (values.shape[0] - lastZeroPos)))]
+
+    rewiredWeights = weights.copy()
+    rewiredWeights[rewiredWeights > smallestPositive] = 1
+    rewiredWeights[rewiredWeights < largestNegative] = 1
     rewiredWeights[rewiredWeights != 1] = 0
     weightMaskCore = rewiredWeights.copy()
 
-    noSurviving = np.sum(rewiredWeights)
-    noRemoved = noWeights - noSurviving
+    # add zeta random weights
+    nrAdd = 0
+    noRewires = noWeights - np.sum(rewiredWeights)
+    while (nrAdd < noRewires):
+        i = np.random.randint(0, rewiredWeights.shape[0])
+        j = np.random.randint(0, rewiredWeights.shape[1])
+        if (rewiredWeights[i, j] == 0):
+            rewiredWeights[i, j] = 1
+            nrAdd += 1
 
-    return weightMaskCore, noRemoved, noSurviving
+    return [rewiredWeights, weightMaskCore]
 
 
-def grow_random(noRewires, rewiredWeights):
-    is_con = np.greater(abs(rewiredWeights), 0).astype(int)
-    reconnect_candidate_coord = np.where(np.logical_not(is_con))
+def rewireMask_improved(weights, noWeights, zeta, distance_mat):
+    # rewire weight matrix
 
+    # remove zeta largest negative and smallest positive weights
+    values = np.sort(weights.ravel())
+    firstZeroPos = find_first_pos(values, 0)
+    lastZeroPos = find_last_pos(values, 0)
+
+    largestNegative = values[int((1-zeta) * firstZeroPos)]
+    smallestPositive = values[int(min(values.shape[0] - 1, lastZeroPos +
+                                      zeta * (values.shape[0] - lastZeroPos)))]
+
+    is_connect = weights.copy()
+    is_connect[is_connect > smallestPositive] = 1
+    is_connect[is_connect < largestNegative] = 1
+    is_connect[is_connect != 1] = 0
+    weightMaskCore = is_connect.copy()
+
+    noRewires = noWeights - np.sum(is_connect)
+    reconnect_candidate_coord = np.where(np.logical_not(is_connect))
     n_candidates = np.shape(reconnect_candidate_coord)[1]
-    reconnect_sample_id = np.random.permutation(n_candidates)[:int(noRewires)]
+
+    p = list()
+    distance_mat = distance_mat / np.max(distance_mat)
+    for i in range(n_candidates):
+        s = reconnect_candidate_coord[0][i]
+        t = reconnect_candidate_coord[1][i]
+        if s == t:
+            p.append(0)
+        else:
+            p.append((1-distance_mat)[s][t])
+    p = p / np.sum(p)
+
+    reconnect_sample_id = np.random.choice(range(int(n_candidates)), size=int(noRewires), replace=False, p=p)
 
     for i in reconnect_sample_id:
         s = reconnect_candidate_coord[0][i]
         t = reconnect_candidate_coord[1][i]
-        is_con[s, t] = 1
+        is_connect[s, t] = 1
 
-    return is_con.astype(int)
+    return [is_connect, weightMaskCore]
 
 
 def create_model(model_dir, hp, Wx, Wr, Wz, Wh, br=None, bz=None, w_out=None, b_out=None):
@@ -121,7 +181,7 @@ def train(model_dir,
 
     mkdir_p(model_dir)
 
-    gesture_data = GestureData()
+    mnist_data = MnistData()
 
     # Network parameters
     default_hp = get_default_hp()
@@ -153,6 +213,33 @@ def train(model_dir,
         save_hp(hp, model_dir)
     [Wx, Wr, Wz, Wh, br, bz, w_out, b_out] = [Wx_0, Wr_0, Wz_0, Wh_0, None, None, None, None]
 
+    # load diatance matrix
+    frontal_meta = []  # [node_id, posx, posy]
+    with open(os.path.join('datasets', 'random_network', 'node_coordinate.csv')) as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        for row in reader:
+            frontal_meta.append((int(row[0]), float(row[1]), float(row[2])))
+
+    n_nodes = len(frontal_meta)
+    distance_matrix = np.zeros((n_nodes, n_nodes))
+    for i in range(n_nodes):
+        i_x = frontal_meta[i][1]
+        i_y = frontal_meta[i][2]
+        for j in range(i + 1, n_nodes):
+            j_x = frontal_meta[j][1]
+            j_y = frontal_meta[j][2]
+            distance_matrix[i][j] = np.sqrt((i_x - j_x) ** 2 + (i_y - j_y) ** 2)
+            distance_matrix[j][i] = distance_matrix[i][j]
+    hp['distance_matrix'] = distance_matrix.tolist()
+    save_hp(hp, model_dir)
+
+    normalized = True
+    if normalized:
+        sigma_D = np.sqrt(np.sum(distance_matrix * distance_matrix) / n_hidden / (n_hidden - 1))
+        hp['l1'] = hp['l1'] / sigma_D
+        save_hp(hp, model_dir)
+
     # Store results
     log = defaultdict(list)
     log['model_dir'] = model_dir
@@ -178,7 +265,7 @@ def train(model_dir,
 
             losses = []
             accs = []
-            for batch_x, batch_y in gesture_data.iterate_train(batch_size=hp['batch_size']):
+            for batch_x, batch_y in mnist_data.iterate_train(batch_size=hp['batch_size']):
                 _, acc, loss = sess.run([model.train_step, model.accuracy, model.cost],
                                         feed_dict={model.x: batch_x, model.y: batch_y})
 
@@ -189,9 +276,9 @@ def train(model_dir,
             # Validation
             if (epoch + 1) % hp['log_period'] == 0:
                 test_acc, test_loss = sess.run([model.accuracy, model.cost],
-                                               feed_dict={model.x: gesture_data.test_x, model.y: gesture_data.test_y})
+                                               feed_dict={model.x: mnist_data.test_x, model.y: mnist_data.test_y})
                 valid_acc, valid_loss = sess.run([model.accuracy, model.cost],
-                                                 feed_dict={model.x: gesture_data.valid_x, model.y: gesture_data.valid_y})
+                                                 feed_dict={model.x: mnist_data.valid_x, model.y: mnist_data.valid_y})
                 test_accuracy.append(test_acc)
                 valid_accuracy.append(valid_acc)
                 print(
@@ -226,7 +313,7 @@ def train(model_dir,
             b_out = sess.run(model.b_out)
 
             # save the recurrent network model
-            if epoch % 20 == 0:
+            if epoch % 10 == 0:
                 fname = open(os.path.join(model_dir, 'edge_list_weighted_' + str(epoch) + '.csv'), 'w', newline='')
                 csv.writer(fname).writerow(('Id', 'Source', 'Target', 'Weight'))
                 x, y = np.where(Wh)
@@ -236,17 +323,15 @@ def train(model_dir,
                     csv.writer(fname).writerow((index, s, t, Wh[s, t]))
                 fname.close()
 
-            # Dynamic sparse reparameterization
-            w_rec_core, noMov, noSur = prune_threshold(weights=Wh, thresholds=hp['threshold'])
+            # SET
+            # It removes the weights closest to zero
+            # w_rec_mask, w_rec_core = rewireMask(weights=Wh, noWeights=nb_non_zero, zeta=hp['zeta'])
+            w_rec_mask, w_rec_core = rewireMask_improved(weights=Wh,
+                                                         noWeights=nb_non_zero,
+                                                         zeta=hp['zeta'],
+                                                         distance_mat=distance_matrix)
             Wh *= w_rec_core
-            w_rec_mask = grow_random(noRewires=noMov,
-                                     rewiredWeights=Wh)  # since RNN contains only one hidden layer, the number of rewired edges is the same as the pruned one
             hp['w_rec_mask'] = w_rec_mask.tolist()
-
-            if noMov > 1.1 * hp['n_prune_params']:
-                hp['threshold'] = hp['threshold'] / 2.0
-            elif noMov < 0.9 * hp['n_prune_params']:
-                hp['threshold'] = hp['threshold'] * 2.0
             save_hp(hp, model_dir)
 
             # learning rate decay
@@ -285,7 +370,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('--modeldir', type=str, default='results/Gesture/rewiring_DSR/DSR_baseline')
+    parser.add_argument('--modeldir', type=str, default='../results/MNIST/rewiring_SET/rewiring_SET_with_cost')
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -293,9 +378,9 @@ if __name__ == '__main__':
           'learning_rate': 0.005,
           'num_edges': 764,
           'sparsity': 1,
-          'threshold': 0.001,
-          'n_prune_params': 100
+          'zeta': 0.1,
+          'l1': 5e-5,
           }
     train(args.modeldir,
-          seed=1,
+          seed=2,
           hp=hp)

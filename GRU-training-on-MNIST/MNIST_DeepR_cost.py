@@ -21,7 +21,7 @@ sys.path.append('../')
 from model.smnistnet import Model
 from datasets.MNIST_preprocess import MnistData
 from utils.tools import mkdir_p, save_hp
-    
+
 
 def get_default_hp():
     hp = {
@@ -63,68 +63,67 @@ def weight_sampler_strict_number(w_0, n_in, n_out, nb_non_zero):
     return w, is_connected
 
 
-def find_first_pos(array, value):
-    idx = (np.abs(array - value)).argmin()
-    return idx
+# https://github.com/guillaumeBellec/deep_rewiring
+def assert_connection_number(theta, targeted_number):
+    '''
+    Function to check during the tensorflow simulation if the number of
+    connection in well defined after each simulation
+    '''
+
+    is_con = np.greater(theta, 0)
+    nb_is_con = np.sum(is_con.astype(int))
+    assert np.equal(nb_is_con, targeted_number), "the number of connection has changed"
 
 
-def find_last_pos(array, value):
-    idx = (np.abs(array - value))[::-1].argmin()
-    return array.shape[0] - idx
+# https://github.com/guillaumeBellec/deep_rewiring
+def rewiring(theta, weights, target_nb_connection, sign_0, epsilon=1e-12):
+    '''
+    The rewiring operation to use after each iteration.
+    :param theta:
+    :param target_nb_connection:
+    :return:
+    '''
+
+    is_con = np.greater(theta, 0).astype(int)
+    w = weights * is_con
+
+    n_connected = np.sum(is_con)
+    nb_reconnect = target_nb_connection - n_connected
+    nb_reconnect = np.max(nb_reconnect, 0)
+
+    reconnect_candidate_coord = np.where(np.logical_not(is_con))
+
+    n_candidates = np.shape(reconnect_candidate_coord)[1]
+    reconnect_sample_id = np.random.permutation(n_candidates)[:nb_reconnect]
+
+    for i in reconnect_sample_id:
+        s = reconnect_candidate_coord[0][i]
+        t = reconnect_candidate_coord[1][i]
+        sign = sign_0[s, t]
+        w[s, t] = sign * epsilon
+
+    w_mask = np.greater(abs(w), 0).astype(int)
+
+    return w, w_mask, nb_reconnect
 
 
-# https://github.com/dcmocanu/sparse-evolutionary-artificial-neural-networks
-def rewireMask(weights, noWeights, zeta):
-    # rewire weight matrix
+def rewiring_improved(theta, weights, target_nb_connection, sign_0, distance_mat, epsilon=1e-12):
+    '''
+    The rewiring operation to use after each iteration.
+    :param theta:
+    :param target_nb_connection:
+    :return:
+    '''
 
-    # remove zeta largest negative and smallest positive weights
-    values = np.sort(weights.ravel())
-    firstZeroPos = find_first_pos(values, 0)
-    lastZeroPos = find_last_pos(values, 0)
+    is_con = np.greater(theta, 0).astype(int)
+    w = weights * is_con
 
-    largestNegative = values[int((1-zeta) * firstZeroPos)]
-    smallestPositive = values[int(min(values.shape[0] - 1, lastZeroPos +
-                                      zeta * (values.shape[0] - lastZeroPos)))]
+    n_connected = np.sum(is_con)
+    nb_reconnect = target_nb_connection - n_connected
+    nb_reconnect = np.max(nb_reconnect, 0)
 
-    rewiredWeights = weights.copy()
-    rewiredWeights[rewiredWeights > smallestPositive] = 1
-    rewiredWeights[rewiredWeights < largestNegative] = 1
-    rewiredWeights[rewiredWeights != 1] = 0
-    weightMaskCore = rewiredWeights.copy()
+    reconnect_candidate_coord = np.where(np.logical_not(is_con))
 
-    # add zeta random weights
-    nrAdd = 0
-    noRewires = noWeights - np.sum(rewiredWeights)
-    while (nrAdd < noRewires):
-        i = np.random.randint(0, rewiredWeights.shape[0])
-        j = np.random.randint(0, rewiredWeights.shape[1])
-        if (rewiredWeights[i, j] == 0):
-            rewiredWeights[i, j] = 1
-            nrAdd += 1
-
-    return [rewiredWeights, weightMaskCore]
-
-
-def rewireMask_improved(weights, noWeights, zeta, distance_mat):
-    # rewire weight matrix
-
-    # remove zeta largest negative and smallest positive weights
-    values = np.sort(weights.ravel())
-    firstZeroPos = find_first_pos(values, 0)
-    lastZeroPos = find_last_pos(values, 0)
-
-    largestNegative = values[int((1-zeta) * firstZeroPos)]
-    smallestPositive = values[int(min(values.shape[0] - 1, lastZeroPos +
-                                      zeta * (values.shape[0] - lastZeroPos)))]
-
-    is_connect = weights.copy()
-    is_connect[is_connect > smallestPositive] = 1
-    is_connect[is_connect < largestNegative] = 1
-    is_connect[is_connect != 1] = 0
-    weightMaskCore = is_connect.copy()
-
-    noRewires = noWeights - np.sum(is_connect)
-    reconnect_candidate_coord = np.where(np.logical_not(is_connect))
     n_candidates = np.shape(reconnect_candidate_coord)[1]
 
     p = list()
@@ -135,17 +134,20 @@ def rewireMask_improved(weights, noWeights, zeta, distance_mat):
         if s == t:
             p.append(0)
         else:
-            p.append((1-distance_mat)[s][t])
+            p.append((1 - distance_mat)[s][t])
     p = p / np.sum(p)
 
-    reconnect_sample_id = np.random.choice(range(int(n_candidates)), size=int(noRewires), replace=False, p=p)
+    reconnect_sample_id = np.random.choice(range(int(n_candidates)), size=int(nb_reconnect), replace=False, p=p)
 
     for i in reconnect_sample_id:
         s = reconnect_candidate_coord[0][i]
         t = reconnect_candidate_coord[1][i]
-        is_connect[s, t] = 1
+        sign = sign_0[s, t]
+        w[s, t] = sign * epsilon
 
-    return [is_connect, weightMaskCore]
+    w_mask = np.greater(abs(w), 0).astype(int)
+
+    return w, w_mask, nb_reconnect
 
 
 def create_model(model_dir, hp, Wx, Wr, Wz, Wh, br=None, bz=None, w_out=None, b_out=None):
@@ -207,6 +209,7 @@ def train(model_dir,
     if (hp['sparsity'] is not None and
             hp['sparsity'] <= 1.0):
         # nb_non_zero = int(n_hidden * n_hidden * hp['sparsity'])
+        Wh_sign_0 = np.sign(Wh_0)
         nb_non_zero = hp['num_edges']
         Wh_0, w_rec_mask = weight_sampler_strict_number(Wh_0, n_hidden, n_hidden, nb_non_zero)
         hp['w_rec_mask'] = w_rec_mask.tolist()
@@ -262,6 +265,8 @@ def train(model_dir,
             else:
                 # Assume everything is restored
                 sess.run(tf.global_variables_initializer())
+
+            Wh_0 = sess.run(model.Wh)
 
             losses = []
             accs = []
@@ -323,14 +328,24 @@ def train(model_dir,
                     csv.writer(fname).writerow((index, s, t, Wh[s, t]))
                 fname.close()
 
-            # SET
-            # It removes the weights closest to zero
-            # w_rec_mask, w_rec_core = rewireMask(weights=Wh, noWeights=nb_non_zero, zeta=hp['zeta'])
-            w_rec_mask, w_rec_core = rewireMask_improved(weights=Wh,
-                                                         noWeights=nb_non_zero,
-                                                         zeta=hp['zeta'],
-                                                         distance_mat=distance_matrix)
-            Wh *= w_rec_core
+            # deep rewiring
+            # Guillaume Bellec et al. (2017) DEEP REWIRING: TRAINING VERY SPARSE DEEP NETWORKS WORKS
+            # arXiv:1711.05136v1
+            mask_connected = lambda th: (np.greater(th, 0)).astype(int)
+            noise_update = lambda th: np.random.normal(scale=1e-3, size=th.shape)
+
+            l1 = 1e-4  # regulation coefficient
+            add_gradient_op = Wh + mask_connected(abs(Wh)) * noise_update(Wh)
+            apply_l1_reg = - mask_connected(abs(Wh)) * np.sign(Wh) * l1
+            Wh_1 = add_gradient_op + apply_l1_reg
+
+            # Wh, w_rec_mask, nb_reconnect = rewiring(Wh_0 * Wh_1, Wh_1, nb_non_zero, Wh_sign_0)
+            Wh, w_rec_mask, nb_reconnect = rewiring_improved(theta=Wh_0 * Wh_1,
+                                                             weights=Wh_1,
+                                                             target_nb_connection=nb_non_zero,
+                                                             sign_0=Wh_sign_0,
+                                                             distance_mat=distance_matrix)
+            assert_connection_number(abs(Wh), nb_non_zero)
             hp['w_rec_mask'] = w_rec_mask.tolist()
             save_hp(hp, model_dir)
 
@@ -370,7 +385,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('--modeldir', type=str, default='results/MNIST/rewiring_SET/rewiring_SET_with_cost')
+    parser.add_argument('--modeldir', type=str, default='../results/MNIST/rewiring_DeepR/rewiring_DeepR_with_cost')
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -378,8 +393,7 @@ if __name__ == '__main__':
           'learning_rate': 0.005,
           'num_edges': 764,
           'sparsity': 1,
-          'zeta': 0.1,
-          'l1': 5e-5,
+          'l1': 1e-5
           }
     train(args.modeldir,
           seed=2,

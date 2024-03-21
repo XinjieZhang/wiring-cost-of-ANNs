@@ -63,7 +63,7 @@ class GestureData:
         interleaved_train = True
         for f in training_files:
             train_traces.extend(
-                cut_in_sequences(load_trace(os.path.join("datasets/gesture", f)), seq_len, interleaved=interleaved_train))
+                cut_in_sequences(load_trace(os.path.join("../datasets/gesture", f)), seq_len, interleaved=interleaved_train))
 
         train_x, train_y = list(zip(*train_traces))
 

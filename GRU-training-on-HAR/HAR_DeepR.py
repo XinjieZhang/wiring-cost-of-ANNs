@@ -1,5 +1,4 @@
 # coding utf-8
-# rewiring with circle layout
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -12,28 +11,24 @@ import numpy as np
 # import tensorflow as tf
 import matplotlib.pyplot as plt
 import tensorflow.compat.v1 as tf
-
 tf.disable_v2_behavior()
 
 import sys
 sys.path.append('../')
-
-from model.smnistnet import Model
-from datasets.MNIST_preprocess import MnistData
+from model.network import Model
+from datasets.Person_preprocess import PersonData
 from utils.tools import mkdir_p, save_hp
 
 
 def get_default_hp():
     hp = {
-        'n_input': 28,
-        'n_steps': 28,
+        'n_input': 3+4,
         'n_hidden': 131,
-        'n_classes': 10,
+        'n_classes': 7,
         'learning_rate': 0.005,
-        'batch_size': 128,
-        'training_iters': 101,
+        'batch_size': 64,
+        'training_iters': 201,
         'log_period': 1,
-        'l1': 0,  # penalty of wiring cost
         'sparsity': None,
     }
     return hp
@@ -107,49 +102,6 @@ def rewiring(theta, weights, target_nb_connection, sign_0, epsilon=1e-12):
     return w, w_mask, nb_reconnect
 
 
-def rewiring_improved(theta, weights, target_nb_connection, sign_0, distance_mat, epsilon=1e-12):
-    '''
-    The rewiring operation to use after each iteration.
-    :param theta:
-    :param target_nb_connection:
-    :return:
-    '''
-
-    is_con = np.greater(theta, 0).astype(int)
-    w = weights * is_con
-
-    n_connected = np.sum(is_con)
-    nb_reconnect = target_nb_connection - n_connected
-    nb_reconnect = np.max(nb_reconnect, 0)
-
-    reconnect_candidate_coord = np.where(np.logical_not(is_con))
-
-    n_candidates = np.shape(reconnect_candidate_coord)[1]
-
-    p = list()
-    distance_mat = distance_mat / np.max(distance_mat)
-    for i in range(n_candidates):
-        s = reconnect_candidate_coord[0][i]
-        t = reconnect_candidate_coord[1][i]
-        if s == t:
-            p.append(0)
-        else:
-            p.append((1 - distance_mat)[s][t])
-    p = p / np.sum(p)
-
-    reconnect_sample_id = np.random.choice(range(int(n_candidates)), size=int(nb_reconnect), replace=False, p=p)
-
-    for i in reconnect_sample_id:
-        s = reconnect_candidate_coord[0][i]
-        t = reconnect_candidate_coord[1][i]
-        sign = sign_0[s, t]
-        w[s, t] = sign * epsilon
-
-    w_mask = np.greater(abs(w), 0).astype(int)
-
-    return w, w_mask, nb_reconnect
-
-
 def create_model(model_dir, hp, Wx, Wr, Wz, Wh, br=None, bz=None, w_out=None, b_out=None):
 
     Wx_initializer = tf.constant_initializer(Wx, dtype=tf.float32)
@@ -183,7 +135,7 @@ def train(model_dir,
 
     mkdir_p(model_dir)
 
-    mnist_data = MnistData()
+    person_data = PersonData()
 
     # Network parameters
     default_hp = get_default_hp()
@@ -216,33 +168,6 @@ def train(model_dir,
         save_hp(hp, model_dir)
     [Wx, Wr, Wz, Wh, br, bz, w_out, b_out] = [Wx_0, Wr_0, Wz_0, Wh_0, None, None, None, None]
 
-    # load diatance matrix
-    frontal_meta = []  # [node_id, posx, posy]
-    with open(os.path.join('datasets', 'random_network', 'node_coordinate.csv')) as f:
-        reader = csv.reader(f)
-        header = next(reader)
-        for row in reader:
-            frontal_meta.append((int(row[0]), float(row[1]), float(row[2])))
-
-    n_nodes = len(frontal_meta)
-    distance_matrix = np.zeros((n_nodes, n_nodes))
-    for i in range(n_nodes):
-        i_x = frontal_meta[i][1]
-        i_y = frontal_meta[i][2]
-        for j in range(i + 1, n_nodes):
-            j_x = frontal_meta[j][1]
-            j_y = frontal_meta[j][2]
-            distance_matrix[i][j] = np.sqrt((i_x - j_x) ** 2 + (i_y - j_y) ** 2)
-            distance_matrix[j][i] = distance_matrix[i][j]
-    hp['distance_matrix'] = distance_matrix.tolist()
-    save_hp(hp, model_dir)
-
-    normalized = True
-    if normalized:
-        sigma_D = np.sqrt(np.sum(distance_matrix * distance_matrix) / n_hidden / (n_hidden - 1))
-        hp['l1'] = hp['l1'] / sigma_D
-        save_hp(hp, model_dir)
-
     # Store results
     log = defaultdict(list)
     log['model_dir'] = model_dir
@@ -270,7 +195,7 @@ def train(model_dir,
 
             losses = []
             accs = []
-            for batch_x, batch_y in mnist_data.iterate_train(batch_size=hp['batch_size']):
+            for batch_x, batch_y in person_data.iterate_train(batch_size=hp['batch_size']):
                 _, acc, loss = sess.run([model.train_step, model.accuracy, model.cost],
                                         feed_dict={model.x: batch_x, model.y: batch_y})
 
@@ -281,9 +206,9 @@ def train(model_dir,
             # Validation
             if (epoch + 1) % hp['log_period'] == 0:
                 test_acc, test_loss = sess.run([model.accuracy, model.cost],
-                                               feed_dict={model.x: mnist_data.test_x, model.y: mnist_data.test_y})
+                                               feed_dict={model.x: person_data.test_x, model.y: person_data.test_y})
                 valid_acc, valid_loss = sess.run([model.accuracy, model.cost],
-                                                 feed_dict={model.x: mnist_data.valid_x, model.y: mnist_data.valid_y})
+                                                 feed_dict={model.x: person_data.valid_x, model.y: person_data.valid_y})
                 test_accuracy.append(test_acc)
                 valid_accuracy.append(valid_acc)
                 print(
@@ -339,12 +264,7 @@ def train(model_dir,
             apply_l1_reg = - mask_connected(abs(Wh)) * np.sign(Wh) * l1
             Wh_1 = add_gradient_op + apply_l1_reg
 
-            # Wh, w_rec_mask, nb_reconnect = rewiring(Wh_0 * Wh_1, Wh_1, nb_non_zero, Wh_sign_0)
-            Wh, w_rec_mask, nb_reconnect = rewiring_improved(theta=Wh_0 * Wh_1,
-                                                             weights=Wh_1,
-                                                             target_nb_connection=nb_non_zero,
-                                                             sign_0=Wh_sign_0,
-                                                             distance_mat=distance_matrix)
+            Wh, w_rec_mask, nb_reconnect = rewiring(Wh_0 * Wh_1, Wh_1, nb_non_zero, Wh_sign_0)
             assert_connection_number(abs(Wh), nb_non_zero)
             hp['w_rec_mask'] = w_rec_mask.tolist()
             save_hp(hp, model_dir)
@@ -385,16 +305,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('--modeldir', type=str, default='results/MNIST/rewiring_DeepR/rewiring_DeepR_with_cost')
+    parser.add_argument('--modeldir', type=str, default='../results/Person/rewiring_DeepR/DeepR_baseline')
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     hp = {
-          'learning_rate': 0.005,
-          'num_edges': 764,
+          'learning_rate': 0.01,
+          'num_edges': 1500,
           'sparsity': 1,
-          'l1': 1e-5
           }
     train(args.modeldir,
-          seed=2,
+          seed=1,
           hp=hp)

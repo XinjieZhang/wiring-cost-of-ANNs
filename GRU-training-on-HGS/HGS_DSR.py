@@ -1,5 +1,4 @@
 # coding utf-8
-# rewiring with circle layout
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -12,28 +11,24 @@ import numpy as np
 # import tensorflow as tf
 import matplotlib.pyplot as plt
 import tensorflow.compat.v1 as tf
-
 tf.disable_v2_behavior()
 
 import sys
 sys.path.append('../')
-
-from model.smnistnet import Model
-from datasets.MNIST_preprocess import MnistData
+from model.network import Model
+from datasets.Gesture_preprocess import GestureData
 from utils.tools import mkdir_p, save_hp
 
 
 def get_default_hp():
     hp = {
-        'n_input': 28,
-        'n_steps': 28,
+        'n_input': 32,
         'n_hidden': 131,
-        'n_classes': 10,
+        'n_classes': 5,
         'learning_rate': 0.005,
-        'batch_size': 128,
-        'training_iters': 101,
+        'batch_size': 32,
+        'training_iters': 301,
         'log_period': 1,
-        'l1': 0,  # penalty of wiring cost
         'sparsity': None,
     }
     return hp
@@ -93,32 +88,6 @@ def grow_random(noRewires, rewiredWeights):
     return is_con.astype(int)
 
 
-def grow_cost(noRewires, rewiredWeights, distance_mat):
-    is_con = np.greater(abs(rewiredWeights), 0).astype(int)
-    reconnect_candidate_coord = np.where(np.logical_not(is_con))
-    n_candidates = np.shape(reconnect_candidate_coord)[1]
-
-    p = list()
-    distance_mat = distance_mat / np.max(distance_mat)
-    for i in range(n_candidates):
-        s = reconnect_candidate_coord[0][i]
-        t = reconnect_candidate_coord[1][i]
-        if s == t:
-            p.append(0)
-        else:
-            p.append((1-distance_mat)[s][t])
-    p = p / np.sum(p)
-
-    reconnect_sample_id = np.random.choice(range(int(n_candidates)), size=int(noRewires), replace=False, p=p)
-
-    for i in reconnect_sample_id:
-        s = reconnect_candidate_coord[0][i]
-        t = reconnect_candidate_coord[1][i]
-        is_con[s, t] = 1
-
-    return is_con.astype(int)
-
-
 def create_model(model_dir, hp, Wx, Wr, Wz, Wh, br=None, bz=None, w_out=None, b_out=None):
 
     Wx_initializer = tf.constant_initializer(Wx, dtype=tf.float32)
@@ -152,7 +121,7 @@ def train(model_dir,
 
     mkdir_p(model_dir)
 
-    mnist_data = MnistData()
+    gesture_data = GestureData()
 
     # Network parameters
     default_hp = get_default_hp()
@@ -184,33 +153,6 @@ def train(model_dir,
         save_hp(hp, model_dir)
     [Wx, Wr, Wz, Wh, br, bz, w_out, b_out] = [Wx_0, Wr_0, Wz_0, Wh_0, None, None, None, None]
 
-    # load diatance matrix
-    frontal_meta = []  # [node_id, posx, posy]
-    with open(os.path.join('datasets', 'random_network', 'node_coordinate.csv')) as f:
-        reader = csv.reader(f)
-        header = next(reader)
-        for row in reader:
-            frontal_meta.append((int(row[0]), float(row[1]), float(row[2])))
-
-    n_nodes = len(frontal_meta)
-    distance_matrix = np.zeros((n_nodes, n_nodes))
-    for i in range(n_nodes):
-        i_x = frontal_meta[i][1]
-        i_y = frontal_meta[i][2]
-        for j in range(i + 1, n_nodes):
-            j_x = frontal_meta[j][1]
-            j_y = frontal_meta[j][2]
-            distance_matrix[i][j] = np.sqrt((i_x - j_x) ** 2 + (i_y - j_y) ** 2)
-            distance_matrix[j][i] = distance_matrix[i][j]
-    hp['distance_matrix'] = distance_matrix.tolist()
-    save_hp(hp, model_dir)
-
-    normalized = True
-    if normalized:
-        sigma_D = np.sqrt(np.sum(distance_matrix * distance_matrix) / n_hidden / (n_hidden - 1))
-        hp['l1'] = hp['l1'] / sigma_D
-        save_hp(hp, model_dir)
-
     # Store results
     log = defaultdict(list)
     log['model_dir'] = model_dir
@@ -236,7 +178,7 @@ def train(model_dir,
 
             losses = []
             accs = []
-            for batch_x, batch_y in mnist_data.iterate_train(batch_size=hp['batch_size']):
+            for batch_x, batch_y in gesture_data.iterate_train(batch_size=hp['batch_size']):
                 _, acc, loss = sess.run([model.train_step, model.accuracy, model.cost],
                                         feed_dict={model.x: batch_x, model.y: batch_y})
 
@@ -247,9 +189,9 @@ def train(model_dir,
             # Validation
             if (epoch + 1) % hp['log_period'] == 0:
                 test_acc, test_loss = sess.run([model.accuracy, model.cost],
-                                               feed_dict={model.x: mnist_data.test_x, model.y: mnist_data.test_y})
+                                               feed_dict={model.x: gesture_data.test_x, model.y: gesture_data.test_y})
                 valid_acc, valid_loss = sess.run([model.accuracy, model.cost],
-                                                 feed_dict={model.x: mnist_data.valid_x, model.y: mnist_data.valid_y})
+                                                 feed_dict={model.x: gesture_data.valid_x, model.y: gesture_data.valid_y})
                 test_accuracy.append(test_acc)
                 valid_accuracy.append(valid_acc)
                 print(
@@ -284,7 +226,7 @@ def train(model_dir,
             b_out = sess.run(model.b_out)
 
             # save the recurrent network model
-            if epoch % 10 == 0:
+            if epoch % 20 == 0:
                 fname = open(os.path.join(model_dir, 'edge_list_weighted_' + str(epoch) + '.csv'), 'w', newline='')
                 csv.writer(fname).writerow(('Id', 'Source', 'Target', 'Weight'))
                 x, y = np.where(Wh)
@@ -297,8 +239,8 @@ def train(model_dir,
             # Dynamic sparse reparameterization
             w_rec_core, noMov, noSur = prune_threshold(weights=Wh, thresholds=hp['threshold'])
             Wh *= w_rec_core
-            w_rec_mask = grow_cost(noRewires=noMov, rewiredWeights=Wh,
-                                   distance_mat=distance_matrix)  # since RNN contains only one hidden layer, the number of rewired edges is the same as the pruned one
+            w_rec_mask = grow_random(noRewires=noMov,
+                                     rewiredWeights=Wh)  # since RNN contains only one hidden layer, the number of rewired edges is the same as the pruned one
             hp['w_rec_mask'] = w_rec_mask.tolist()
 
             if noMov > 1.1 * hp['n_prune_params']:
@@ -343,7 +285,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('--modeldir', type=str, default='results/MNIST/rewiring_DSR/rewiring_DSR_with_cost')
+    parser.add_argument('--modeldir', type=str, default='../results/Gesture/rewiring_DSR/DSR_baseline')
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -352,9 +294,8 @@ if __name__ == '__main__':
           'num_edges': 764,
           'sparsity': 1,
           'threshold': 0.001,
-          'n_prune_params': 100,
-          'l1': 1e-5
+          'n_prune_params': 100
           }
     train(args.modeldir,
-          seed=2,
+          seed=1,
           hp=hp)

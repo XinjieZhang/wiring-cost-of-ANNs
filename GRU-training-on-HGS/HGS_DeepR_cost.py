@@ -12,23 +12,25 @@ import numpy as np
 # import tensorflow as tf
 import matplotlib.pyplot as plt
 import tensorflow.compat.v1 as tf
+
 tf.disable_v2_behavior()
 
 import sys
 sys.path.append('../')
+
 from model.network import Model
-from datasets.Person_preprocess import PersonData
+from datasets.Gesture_preprocess import GestureData
 from utils.tools import mkdir_p, save_hp
 
 
 def get_default_hp():
     hp = {
-        'n_input': 3+4,
+        'n_input': 32,
         'n_hidden': 131,
-        'n_classes': 7,
+        'n_classes': 5,
         'learning_rate': 0.005,
-        'batch_size': 64,
-        'training_iters': 201,
+        'batch_size': 32,
+        'training_iters': 301,
         'log_period': 1,
         'l1': 0,  # penalty of wiring cost
         'sparsity': None,
@@ -180,7 +182,7 @@ def train(model_dir,
 
     mkdir_p(model_dir)
 
-    person_data = PersonData()
+    gesture_data = GestureData()
 
     # Network parameters
     default_hp = get_default_hp()
@@ -267,7 +269,7 @@ def train(model_dir,
 
             losses = []
             accs = []
-            for batch_x, batch_y in person_data.iterate_train(batch_size=hp['batch_size']):
+            for batch_x, batch_y in gesture_data.iterate_train(batch_size=hp['batch_size']):
                 _, acc, loss = sess.run([model.train_step, model.accuracy, model.cost],
                                         feed_dict={model.x: batch_x, model.y: batch_y})
 
@@ -278,9 +280,9 @@ def train(model_dir,
             # Validation
             if (epoch + 1) % hp['log_period'] == 0:
                 test_acc, test_loss = sess.run([model.accuracy, model.cost],
-                                               feed_dict={model.x: person_data.test_x, model.y: person_data.test_y})
+                                               feed_dict={model.x: gesture_data.test_x, model.y: gesture_data.test_y})
                 valid_acc, valid_loss = sess.run([model.accuracy, model.cost],
-                                                 feed_dict={model.x: person_data.valid_x, model.y: person_data.valid_y})
+                                                 feed_dict={model.x: gesture_data.valid_x, model.y: gesture_data.valid_y})
                 test_accuracy.append(test_acc)
                 valid_accuracy.append(valid_acc)
                 print(
@@ -315,7 +317,7 @@ def train(model_dir,
             b_out = sess.run(model.b_out)
 
             # save the recurrent network model
-            if epoch % 10 == 0:
+            if epoch % 20 == 0:
                 fname = open(os.path.join(model_dir, 'edge_list_weighted_' + str(epoch) + '.csv'), 'w', newline='')
                 csv.writer(fname).writerow(('Id', 'Source', 'Target', 'Weight'))
                 x, y = np.where(Wh)
@@ -382,13 +384,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('--modeldir', type=str, default='results/Person/rewiring_DeepR/rewiring_DeepR_with_cost')
+    parser.add_argument('--modeldir', type=str, default='../results/Gesture/rewiring_DeepR/rewiring_DeepR_with_cost')
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     hp = {
-          'learning_rate': 0.01,
-          'num_edges': 1500,
+          'learning_rate': 0.005,
+          'num_edges': 764,
           'sparsity': 1,
           'l1': 1e-4
           }
