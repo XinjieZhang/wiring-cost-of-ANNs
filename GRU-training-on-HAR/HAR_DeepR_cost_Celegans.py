@@ -1,5 +1,5 @@
 # coding utf-8
-# rewiring with network for CNS neurons of a larva of Ciona intestinalis
+# rewiring with C. elegans Connectome
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -9,14 +9,15 @@ import time
 from collections import defaultdict
 
 import numpy as np
-import tensorflow as tf
+# import tensorflow as tf
+import networkx as nx
 import matplotlib.pyplot as plt
-# import tensorflow.compat.v1 as tf
-# tf.disable_v2_behavior()
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 import sys
 sys.path.append('../')
-from model.network1 import Model
+from model.network import Model
 from datasets.Person_preprocess import PersonData
 from utils.tools import mkdir_p, save_hp
 
@@ -24,16 +25,50 @@ from utils.tools import mkdir_p, save_hp
 def get_default_hp():
     hp = {
         'n_input': 3+4,
-        'n_hidden': 176,
+        'n_hidden': 279,
+        'num_edges': 2194,
         'n_classes': 7,
         'learning_rate': 0.005,
         'batch_size': 64,
         'training_iters': 201,
         'log_period': 1,
-        'l1': 0,
-        'sparsity': None
+        'l1': 0
     }
     return hp
+
+
+def get_input_or_output_nodes():
+    input_nodes = []
+    with open(os.path.join('../datasets', 'C. elegans', 'Sensory.csv'), 'r', encoding='utf-8') as ff:
+        reader = csv.reader(ff)
+        header = next(reader)
+        for row in reader:
+            if row[2] not in input_nodes:
+                input_nodes.append(row[2])
+
+    output_nodes = []
+    with open(os.path.join('../datasets', 'C. elegans', 'Neurons_to_Muscles.csv')) as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        for row in reader:
+            if row[1] not in output_nodes:
+                output_nodes.append(row[1])
+
+    return input_nodes, output_nodes
+
+
+def largest_connected_component_of_Celegans():
+
+    G = nx.DiGraph()
+    with open(os.path.join('../datasets', 'C. elegans', 'Connectome.csv')) as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        for row in reader:
+            G.add_edge(row[1], row[2])
+
+    largest_cc = list(max(nx.connected_components(nx.Graph(G)), key=len))
+
+    return largest_cc
 
 
 def weight_sampler_strict_number(w_0, n_in, n_out, nb_non_zero):
@@ -197,44 +232,35 @@ def train(model_dir,
     # initializer weights
     n_input = hp['n_input']
     n_hidden = hp['n_hidden']
-    rng = np.random.RandomState()
+    n_classes = hp['n_classes']
 
-    Wx_0 = rng.randn(n_input, n_hidden)
-    Wr_0 = rng.randn(n_input, n_hidden)
-    Wz_0 = rng.randn(n_input, n_hidden)
-    Wh_0 = rng.randn(n_hidden, n_hidden) / np.sqrt(n_hidden)
+    # load diatance matrix
+    largest_cc = largest_connected_component_of_Celegans()
 
-    Wh_sign_0 = np.sign(Wh_0)
-    nb_non_zero = hp['num_edges']
-    Wh_0, w_rec_mask = weight_sampler_strict_number(Wh_0, n_hidden, n_hidden, nb_non_zero)
-    hp['w_rec_mask'] = w_rec_mask.tolist()
-    save_hp(hp, model_dir)
-    [Wx, Wr, Wz, Wh, br, bz, w_out, b_out] = [Wx_0, Wr_0, Wz_0, Wh_0, None, None, None, None]
-
-    # load diatance matrix of C. elegans frontal network
-    CNS_meta = []  # [node_label, posx, posy, posz]
-    with open(os.path.join('datasets', 'Ciona', 'Ciona_CNS_neurons.csv')) as f:
+    meta = []  # [node_id, posx, posy, posz]
+    with open(os.path.join('../datasets', 'C. elegans', 'spatialpositions', 'distances.csv')) as f:
         reader = csv.reader(f)
         header = next(reader)
         for row in reader:
-            CNS_meta.append((str(row[0]), float(row[2]), float(row[3]), float(row[4])))
+            if row[0] in largest_cc:
+                meta.append((str(row[0]), float(row[1]), float(row[2]), float(row[3])))
 
-    CNS_meta_1 = np.random.permutation(CNS_meta)
-    fname = open(os.path.join(model_dir, 'Ciona_CNS_neurons.csv'), 'w', newline='')
+    meta_1 = np.random.permutation(meta)
+    fname = open(os.path.join(model_dir, 'C-elegans-connectom.csv'), 'w', newline='')
     csv.writer(fname).writerow(('Id', 'name', 'posx', 'posy', 'posz'))
-    for index in range(len(CNS_meta_1)):
-        csv.writer(fname).writerow((index, CNS_meta_1[index][0], CNS_meta_1[index][1], CNS_meta_1[index][2], CNS_meta_1[index][3]))
+    for index in range(len(meta_1)):
+        csv.writer(fname).writerow((index, meta_1[index][0], meta_1[index][1], meta_1[index][2], meta_1[index][3]))
     fname.close()
 
     distance_matrix = np.zeros((n_hidden, n_hidden))
     for i in range(n_hidden):
-        i_x = float(CNS_meta_1[i][1])
-        i_y = float(CNS_meta_1[i][2])
-        i_z = float(CNS_meta_1[i][3])
+        i_x = float(meta_1[i][1])
+        i_y = float(meta_1[i][2])
+        i_z = float(meta_1[i][3])
         for j in range(i + 1, n_hidden):
-            j_x = float(CNS_meta_1[j][1])
-            j_y = float(CNS_meta_1[j][2])
-            j_z = float(CNS_meta_1[j][3])
+            j_x = float(meta_1[j][1])
+            j_y = float(meta_1[j][2])
+            j_z = float(meta_1[j][3])
             distance_matrix[i][j] = np.sqrt((i_x - j_x) ** 2 + (i_y - j_y) ** 2 + (i_z - j_z)**2)
             distance_matrix[j][i] = distance_matrix[i][j]
     hp['distance_matrix'] = distance_matrix.tolist()
@@ -245,6 +271,49 @@ def train(model_dir,
         hp['l1'] = hp['l1'] / sigma_D
         save_hp(hp, model_dir)
 
+    input_nodes, output_nodes = get_input_or_output_nodes()
+    w_in_mask = np.zeros((n_input, n_hidden))
+    w_out_mask = np.zeros((n_hidden, n_classes))
+
+    randomization = False
+    if randomization:
+        for index in np.random.choice(n_hidden, len(input_nodes), replace=False):
+            w_in_mask[:, index] = 1
+
+        for index in np.random.choice(n_hidden, len(output_nodes), replace=False):
+            w_out_mask[index, :] = 1
+    else:
+        for index in range(len(meta_1)):
+            if meta_1[index][0] in input_nodes:
+                w_in_mask[:, index] = 1
+            if meta_1[index][0] in output_nodes:
+                w_out_mask[index, :] = 1
+
+    hp['Wx_mask'] = w_in_mask.tolist()
+    hp['Wr_mask'] = w_in_mask.tolist()
+    hp['Wz_mask'] = w_in_mask.tolist()
+    hp['w_out_mask'] = w_out_mask.tolist()
+
+    rng = np.random.RandomState()
+    Wx_0 = rng.randn(n_input, n_hidden)
+    Wx_0 = Wx_0 * w_in_mask
+    Wr_0 = rng.randn(n_input, n_hidden)
+    Wr_0 = Wr_0 * w_in_mask
+    Wz_0 = rng.randn(n_input, n_hidden)
+    Wz_0 = Wz_0 * w_in_mask
+
+    W_out0 = rng.randn(n_hidden, n_classes)
+    W_out0 = W_out0 * w_out_mask
+
+    Wh_0 = rng.randn(n_hidden, n_hidden) / np.sqrt(n_hidden)
+    Wh_sign_0 = np.sign(Wh_0)
+
+    nb_non_zero = hp['num_edges']
+    Wh_0, w_rec_mask = weight_sampler_strict_number(Wh_0, n_hidden, n_hidden, nb_non_zero)
+    hp['w_rec_mask'] = w_rec_mask.tolist()
+    save_hp(hp, model_dir)
+    [Wx, Wr, Wz, Wh, br, bz, w_out, b_out] = [Wx_0, Wr_0, Wz_0, Wh_0, None, None, W_out0, None]
+
     # Store results
     log = defaultdict(list)
     log['model_dir'] = model_dir
@@ -252,23 +321,16 @@ def train(model_dir,
     # Record time
     t_start = time.time()
 
-    # Reset Tensorflow before running anything
-    tf.reset_default_graph()
-
     train_accuracy = []
     valid_accuracy = []
     test_accuracy = []
     best_valid_accuracy = 0
     best_valid_stats = (0, 0, 0, 0, 0, 0, 0)
     for epoch in range(hp['training_iters']):
+        # Build the model
+        model = create_model(model_dir, hp, Wx, Wr, Wz, Wh, br, bz, w_out, b_out)
 
-        session_conf = tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))
-        with tf.Session(config=session_conf) as sess:
-        # with tf.Session() as sess:
-
-            # Build the model
-            model = create_model(model_dir, hp, Wx, Wr, Wz, Wh, br, bz, w_out, b_out)
-
+        with tf.Session() as sess:
             if load_dir is not None:
                 sess.run(tf.global_variables_initializer())
                 model.restore(load_dir)  # restore trainable variables
@@ -340,12 +402,12 @@ def train(model_dir,
             apply_l1_reg = - mask_connected(abs(Wh)) * np.sign(Wh) * l1
             Wh_1 = add_gradient_op + apply_l1_reg
 
-            # Wh, w_rec_mask, nb_reconnect = rewiring(Wh_0 * Wh_1, Wh_1, nb_non_zero, Wh_sign_0)
-            Wh, w_rec_mask, nb_reconnect = rewiring_improved(theta=Wh_0 * Wh_1,
-                                                             weights=Wh_1,
-                                                             target_nb_connection=nb_non_zero,
-                                                             sign_0=Wh_sign_0,
-                                                             distance_mat=distance_matrix)
+            Wh, w_rec_mask, nb_reconnect = rewiring(Wh_0 * Wh_1, Wh_1, nb_non_zero, Wh_sign_0)
+            # Wh, w_rec_mask, nb_reconnect = rewiring_improved(theta=Wh_0 * Wh_1,
+            #                                                  weights=Wh_1,
+            #                                                  target_nb_connection=nb_non_zero,
+            #                                                  sign_0=Wh_sign_0,
+            #                                                  distance_mat=distance_matrix)
             assert_connection_number(abs(Wh), nb_non_zero)
             hp['w_rec_mask'] = w_rec_mask.tolist()
             save_hp(hp, model_dir)
@@ -363,7 +425,7 @@ def train(model_dir,
                 save_hp(hp, model_dir)
 
         tf.reset_default_graph()
-        # sess.close()
+        sess.close()
 
     print("optimization finished!")
     best_epoch, train_loss, train_acc, valid_loss, valid_acc, test_loss, test_acc = best_valid_stats
@@ -378,12 +440,12 @@ def train(model_dir,
     np.savetxt(os.path.join(model_dir, 'test_accuracy.txt'), np.asarray(test_accuracy))
 
     # plot accuracy over time
-    # epoch_seq = np.arange(1, hp['training_iters'] + 1)
-    # plt.plot(epoch_seq, train_accuracy)
-    # plt.title('train accuracy')
-    # plt.xlabel('Epochs')
-    # plt.ylabel('Accuracy')
-    # plt.show()
+    epoch_seq = np.arange(1, hp['training_iters'] + 1)
+    plt.plot(epoch_seq, train_accuracy)
+    plt.title('train accuracy')
+    plt.xlabel('Epochs')
+    plt.ylabel('Accuracy')
+    plt.show()
 
 
 if __name__ == '__main__':
@@ -394,19 +456,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('--modeldir', type=str, default=os.path.join('results', 'Person', 'Ciona', 'test'))
+    parser.add_argument('--modeldir', type=str, default='../results/Person/C_elegans_connectom/test1')
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     hp = {
-        'learning_rate': 0.005,
-        'n_hidden': 176,
-        'num_edges': 1920,
-        'l1': 1e-4,
-        'sparsity': 1,
-        'sparsity_input': None,
-        'sparsity_output': None
-    }
+          'training_iters': 151,
+          'learning_rate': 0.008,
+          'num_edges': 2194,
+          'l1': 3e-3,
+          'sparsity': 1,
+          'sparsity_input': 1,
+          'sparsity_output': 1
+          }
     train(args.modeldir,
           seed=2,
           hp=hp)

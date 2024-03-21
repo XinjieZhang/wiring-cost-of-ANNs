@@ -1,9 +1,6 @@
 # coding utf-8
 
 import os
-# import tensorflow as tf
-# import tensorflow.compat.v1 as tf
-# tf.disable_v2_behavior()
 
 import sys
 sys.path.append('../')
@@ -113,7 +110,6 @@ class Model:
                 # self.cost_wiring += hp['l1'] * tf.reduce_mean(tf.abs(self.recurrent_weight))
                 self.cost_wiring += hp['l1'] * tf.reduce_sum(tf.abs(self.recurrent_weight))
 
-
         # Create an optimizer
         self.opt = tf.train.AdamOptimizer(learning_rate=hp['learning_rate'])
 
@@ -133,47 +129,41 @@ class Model:
         # Apply any applicable weights masks to the gradient and clip
         capped_gvs = []
         for grad, var in self.grads_and_vars:
-            # if 'Wx' in var.op.name:
-            #     if 'w_in_mask' in self.hp:
-            #         grad *= self.hp['w_in_mask']
-            # elif 'Wr' in var.op.name:
-            #     if 'w_in_mask' in self.hp:
-            #         grad *= self.hp['w_in_mask']
-            # elif 'Wz' in var.op.name:
-            #     if 'w_in_mask' in self.hp:
-            #         grad *= self.hp['w_in_mask']
+            if 'sparsity_input' in self.hp and self.hp['sparsity_input'] is not None:
+                if 'Wx' in var.op.name:
+                    grad *= self.hp['Wx_mask']
+                elif 'Wr' in var.op.name:
+                    grad *= self.hp['Wr_mask']
+                elif 'Wz' in var.op.name:
+                    grad *= self.hp['Wz_mask']
 
-            if 'Wh' in var.op.name:
-                if 'w_rec_mask' in self.hp:
+            if self.hp['sparsity'] is not None:
+                if 'Wh' in var.op.name:
                     grad *= self.hp['w_rec_mask']
-            elif 'dense/kernel' in var.op.name:
-                if 'w_out_mask' in self.hp:
+
+            if 'sparsity_output' in self.hp and self.hp['sparsity_output'] is not None:
+                if 'dense/kernel' in var.op.name:
                     grad *= self.hp['w_out_mask']
+
             capped_gvs.append((tf.clip_by_value(grad, -1., 1.), var))
         self.train_step = self.opt.apply_gradients(capped_gvs)
 
-    # https://github.com/gyyang/multitask/blob/master/network.py
     def restore(self, load_dir=None):
         """restore the model"""
         sess = tf.get_default_session()
         if load_dir is None:
             load_dir = self.model_dir
         save_path = os.path.join(load_dir, 'model.ckpt')
-        try:
-            self.saver.restore(sess, save_path)
-        except:
-            # Some earlier checkpoints only stored trainable variables
-            self.saver = tf.train.Saver(self.var_list)
-            self.saver.restore(sess, save_path)
-        print("Model restored from file: %s" % save_path)
+        self.saver = tf.train.Saver(self.var_list)
+        self.saver.restore(sess, save_path)
+        # kprint("Model restored from file: %s" % save_path)
 
-    # https://github.com/gyyang/multitask/blob/master/network.py
     def save(self):
         """Save the model."""
         sess = tf.get_default_session()
         save_path = os.path.join(self.model_dir, 'model.ckpt')
         self.saver.save(sess, save_path)
-        print("Model saved in file: %s" % save_path)
+        # print("Model saved in file: %s" % save_path)
 
     # https://github.com/gyyang/multitask/blob/master/network.py
     def lesion_units(self, sess, units):
@@ -195,4 +185,14 @@ class Model:
             elif 'Wh' in v.name:
                 # recurrent weights
                 v_val[units, :] = 0
+            sess.run(v.assign(v_val))
+
+    def weight_update(self, sess, Wh, Wh_name):
+        if Wh is None:
+            return
+
+        for v in self.var_list:
+            v_val = sess.run(v)
+            if str(Wh_name) in v.name:
+                v_val = Wh
             sess.run(v.assign(v_val))

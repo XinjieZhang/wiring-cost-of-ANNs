@@ -186,7 +186,7 @@ def train(model_dir,
 
     # load diatance matrix
     frontal_meta = []  # [node_id, posx, posy]
-    with open(os.path.join('datasets', 'random_network', 'node_coordinate.csv')) as f:
+    with open(os.path.join('../datasets', 'random_network', 'node_coordinate.csv')) as f:
         reader = csv.reader(f)
         header = next(reader)
         for row in reader:
