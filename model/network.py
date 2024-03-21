@@ -1,7 +1,7 @@
 # coding utf-8
 
 import os
-import tensorflow as tf
+# import tensorflow as tf
 # import tensorflow.compat.v1 as tf
 # tf.disable_v2_behavior()
 
@@ -9,6 +9,8 @@ import sys
 sys.path.append('../')
 from model.GRUCell import GRUCell
 from utils.tools import load_hp, print_variables
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 
 class Model:
@@ -105,9 +107,12 @@ class Model:
         if ('l1' in hp and hp['l1'] > 0):
             if 'distance_matrix' in hp:
                 Distance = hp['distance_matrix']
-                self.cost_wiring += hp['l1'] * tf.reduce_mean(tf.abs(self.recurrent_weight) * Distance)
+                # self.cost_wiring += hp['l1'] * tf.reduce_mean(tf.abs(self.recurrent_weight) * Distance)
+                self.cost_wiring += hp['l1'] * tf.reduce_sum(tf.abs(self.recurrent_weight) * Distance)
             else:
-                self.cost_wiring += hp['l1'] * tf.reduce_mean(tf.abs(self.recurrent_weight))
+                # self.cost_wiring += hp['l1'] * tf.reduce_mean(tf.abs(self.recurrent_weight))
+                self.cost_wiring += hp['l1'] * tf.reduce_sum(tf.abs(self.recurrent_weight))
+
 
         # Create an optimizer
         self.opt = tf.train.AdamOptimizer(learning_rate=hp['learning_rate'])

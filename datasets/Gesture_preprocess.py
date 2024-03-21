@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 import os
 
+import sys
+sys.path.append('../')
+
 
 # https://github.com/raminmh/liquid_time_constant_networks/blob/master/experiments_with_ltcs/gesture.py
 
@@ -60,7 +63,7 @@ class GestureData:
         interleaved_train = True
         for f in training_files:
             train_traces.extend(
-                cut_in_sequences(load_trace(os.path.join("../datasets/gesture", f)), seq_len, interleaved=interleaved_train))
+                cut_in_sequences(load_trace(os.path.join("datasets/gesture", f)), seq_len, interleaved=interleaved_train))
 
         train_x, train_y = list(zip(*train_traces))
 

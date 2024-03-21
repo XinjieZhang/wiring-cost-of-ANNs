@@ -44,7 +44,7 @@ def load_crappy_formated_csv():
 
     all_feats = []
     all_labels = []
-    with open("../datasets/person/ConfLongDemo_JSI.txt", "r") as f:
+    with open("datasets/person/ConfLongDemo_JSI.txt", "r") as f:
         current_person = "A01"
 
         for line in f:
