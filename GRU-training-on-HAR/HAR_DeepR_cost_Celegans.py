@@ -456,7 +456,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('--modeldir', type=str, default='../results/Person/C_elegans_connectom/test1')
+    parser.add_argument('--modeldir', type=str, default='../results/Person/C_elegans_connectom/test')
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
