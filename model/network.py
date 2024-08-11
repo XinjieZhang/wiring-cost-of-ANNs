@@ -156,7 +156,7 @@ class Model:
         save_path = os.path.join(load_dir, 'model.ckpt')
         self.saver = tf.train.Saver(self.var_list)
         self.saver.restore(sess, save_path)
-        # kprint("Model restored from file: %s" % save_path)
+        # print("Model restored from file: %s" % save_path)
 
     def save(self):
         """Save the model."""
